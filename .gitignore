@@ -1,0 +1,10 @@
+node_modules
+dist
+out
+.vscode
+.DS_Store
+*.log
+*.exe
+assistant/node_modules
+assistant/dist
+assistant/out
