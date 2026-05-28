@@ -4,8 +4,9 @@ export class OllamaProvider extends BaseAIProvider {
   private baseUrl: string;
   private model: string;
   private abortController: AbortController | null = null;
+  private currentContext: string = '';
 
-  constructor(baseUrl: string = 'http://localhost:11434', model: string = 'llama3') {
+  constructor(baseUrl: string = 'http://localhost:11434', model: string = 'llava') {
     super();
     this.baseUrl = baseUrl;
     this.model = model;
@@ -17,10 +18,11 @@ export class OllamaProvider extends BaseAIProvider {
       if (response.ok) {
         this.setState('idle');
       } else {
-        this.setState('error');
+        throw new Error('Ollama not reachable');
       }
     } catch (e) {
       this.setState('error');
+      throw e;
     }
   }
 
@@ -29,12 +31,10 @@ export class OllamaProvider extends BaseAIProvider {
   }
 
   sendAudio(chunk: Int16Array): void {
-    // Local Ollama doesn't support direct PCM streaming yet.
-    // We would need a local Whisper instance to transcribe first.
-    console.log('Ollama: Audio input received (requires local STT)');
+    // Local STT would go here. For now, we assume text or trigger vision.
   }
 
-  async sendText(text: string): Promise<void> {
+  async sendText(text: string, images?: string[]): Promise<void> {
     this.setState('thinking');
     this.abortController = new AbortController();
 
@@ -44,6 +44,7 @@ export class OllamaProvider extends BaseAIProvider {
         body: JSON.stringify({
           model: this.model,
           prompt: text,
+          images: images,
           stream: true,
         }),
         signal: this.abortController.signal,
@@ -60,9 +61,17 @@ export class OllamaProvider extends BaseAIProvider {
         const lines = chunk.split('\n').filter(l => l.trim());
 
         for (const line of lines) {
-          const json = JSON.parse(line);
-          if (json.response) {
-            this.emitTextResponse(json.response);
+          try {
+            const json = JSON.parse(line);
+            if (json.response) {
+              this.emitTextResponse(json.response);
+              this.emitTranscript(json.response, false);
+            }
+            if (json.done) {
+              this.emitTranscript('', true);
+            }
+          } catch (e) {
+            console.error('Failed to parse Ollama chunk:', e);
           }
         }
       }
@@ -74,12 +83,9 @@ export class OllamaProvider extends BaseAIProvider {
     }
   }
 
-  sendVision(frame: string): void {
-    // Ollama supports vision with models like 'llava'
-    this.sendTextWithVision('What is in this image?', frame);
-  }
-
-  private async sendTextWithVision(text: string, frame: string): Promise<void> {
-     // Implementation for multimodal Ollama
+  sendVision(frameBase64: string): void {
+    const cleanBase64 = frameBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+    // In a realtime loop, we might not want to prompt every frame unless asked.
+    // This is a placeholder for context-aware vision analysis.
   }
 }

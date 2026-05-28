@@ -5,6 +5,17 @@ out
 .DS_Store
 *.log
 *.exe
+*.dll
+*.so
+*.node
+*.pdb
+*.lib
+*.obj
+*.cache
 assistant/node_modules
 assistant/dist
 assistant/out
+assistant/.vite
+assistant/native/target
+assistant/native/target/release
+assistant/native/target/debug

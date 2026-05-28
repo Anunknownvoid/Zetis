@@ -9,71 +9,114 @@ import { captureScreen } from '../vision/capture';
 export class AssistantManager extends EventEmitter {
   private provider: BaseAIProvider | null = null;
   private win: BrowserWindow;
-  private captureSourceId: string = 'screen:0:0';
+  private nativeEngine: any;
   private visionInterval: NodeJS.Timeout | null = null;
+  private captureSourceId: string = 'screen:0:0';
+  private isProcessingVision: boolean = false;
 
-  constructor(win: BrowserWindow) {
+  constructor(win: BrowserWindow, nativeEngine: any) {
     super();
     this.win = win;
+    this.nativeEngine = nativeEngine;
   }
 
   async setProvider(type: string, config: any) {
-    if (this.provider) await this.provider.disconnect();
+    try {
+      if (this.provider) await this.provider.disconnect();
 
-    if (type === 'openai-realtime') {
-      this.provider = new OpenAIRealtimeProvider(config.apiKey);
-    } else if (type === 'ollama') {
-      this.provider = new OllamaProvider(config.baseUrl, config.model);
-    }
+      if (type === 'openai-realtime') {
+        this.provider = new OpenAIRealtimeProvider(config.apiKey);
+      } else if (type === 'ollama') {
+        this.provider = new OllamaProvider(config.baseUrl, config.model);
+      }
 
-    if (this.provider) {
-      this.provider.on('state-change', (state: AssistantState) => {
-        this.win.webContents.send('assistant-state', state);
-      });
+      if (this.provider) {
+        this.provider.on('state-change', (state: AssistantState) => {
+          if (!this.win.isDestroyed()) {
+            this.win.webContents.send('assistant-state', state);
+          }
+        });
 
-      this.provider.on('transcript', (data: any) => {
-        this.win.webContents.send('transcript', data.text, data.isFinal);
-      });
+        this.provider.on('transcript', (data: any) => {
+          if (!this.win.isDestroyed()) {
+            this.win.webContents.send('transcript', data.text, data.isFinal);
+          }
+        });
 
-      this.provider.on('audio-response', (chunk: Buffer) => {
-        this.win.webContents.send('audio-response', chunk);
-      });
+        this.provider.on('audio-response', (chunk: Buffer) => {
+          if (!this.win.isDestroyed()) {
+            this.win.webContents.send('audio-response', chunk);
+          }
+        });
 
-      this.provider.on('interrupt', () => {
-        this.win.webContents.send('interrupt-audio');
-      });
+        this.provider.on('text-response', (text: string) => {
+          if (!this.win.isDestroyed()) {
+            this.win.webContents.send('assistant-response', text);
+          }
+        });
 
-      await this.provider.connect();
-      this.startVisionLoop();
+        await this.provider.connect();
+        this.startVisionLoop();
+      }
+    } catch (e) {
+      console.error('Failed to set provider:', e);
+      if (!this.win.isDestroyed()) {
+        this.win.webContents.send('assistant-state', 'error');
+      }
     }
   }
 
   private startVisionLoop() {
     if (this.visionInterval) clearInterval(this.visionInterval);
 
-    // Capture screen every 5 seconds for context
     this.visionInterval = setInterval(async () => {
-      if (this.provider && this.captureSourceId) {
-        try {
-          const frame = await captureScreen(this.captureSourceId);
-          this.provider.sendVision(frame);
-        } catch (e) {
-          console.error('Vision capture failed:', e);
+      if (!this.provider || this.isProcessingVision) return;
+
+      this.isProcessingVision = true;
+      try {
+        let frame: string | null = null;
+
+        if (this.nativeEngine) {
+          try {
+             // Use method name from Rust [napi] definition
+             const nativeFrame = this.nativeEngine.getScreenFrame();
+             if (nativeFrame && nativeFrame !== 'MOCK_FRAME') {
+               frame = nativeFrame;
+             }
+          } catch (e) {
+             // Fallback
+          }
         }
+
+        if (!frame) {
+          frame = await captureScreen(this.captureSourceId);
+        }
+
+        if (frame && this.provider) {
+          this.provider.sendVision(frame);
+        }
+      } catch (e) {
+        console.error('Vision loop error:', e);
+      } finally {
+        this.isProcessingVision = false;
       }
-    }, 5000);
+    }, 2000);
   }
 
   handleAudioChunk(chunk: Int16Array) {
-    this.provider?.sendAudio(chunk);
-  }
-
-  setVisionSource(sourceId: string) {
-    this.captureSourceId = sourceId;
+    try {
+      this.provider?.sendAudio(chunk);
+    } catch (e) {
+      console.error('Failed to send audio chunk to provider:', e);
+    }
   }
 
   stop() {
-    if (this.visionInterval) clearInterval(this.visionInterval);
+    if (this.visionInterval) {
+      clearInterval(this.visionInterval);
+      this.visionInterval = null;
+    }
     this.provider?.disconnect();
+    this.isProcessingVision = false;
   }
 }
